@@ -77,6 +77,7 @@
     <string name="auditor_app_variant_release">Release build signed by GrapheneOS</string>
     <string name="auditor_app_variant_play">Release build signed by Play Store</string>
     <string name="auditor_app_variant_debug">Debug build signed by GrapheneOS</string>
+    <string name="os_build_number">OS build number: %s\n</string>
     <string name="user_profile_secure">User profile secure: %s\n</string>
     <string name="enrolled_biometrics">Enrolled biometrics: %s\n</string>
     <string name="accessibility">Accessibility service(s) enabled: %s\n</string>

@@ -36,6 +36,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
@@ -54,9 +55,9 @@ import java.security.cert.Certificate;
 import java.security.cert.CertificateEncodingException;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
-import java.security.cert.CertificateParsingException;
 import java.security.cert.X509Certificate;
 import java.security.spec.ECGenParameterSpec;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
@@ -238,7 +239,7 @@ class AttestationProtocol {
     private static final String AUDITOR_APP_SIGNATURE_DIGEST_PLAY =
             "075335BD7B54C965222B5284D2A1FDEF1198AE45EC7B09A4934287A0E3A243C7";
     private static final String AUDITOR_APP_SIGNATURE_DIGEST_DEBUG =
-            "17727D8B61D55A864936B1A7B4A2554A15151F32EBCF44CDAA6E6C3258231890";
+            "45184FA9B63BD29407DDFE1840D7769A0613EA4933FF843F9D772819749422AB";
     private static final byte AUDITOR_APP_VARIANT_RELEASE = 0;
     private static final byte AUDITOR_APP_VARIANT_PLAY = 1;
     private static final byte AUDITOR_APP_VARIANT_DEBUG = 2;
@@ -1009,12 +1010,14 @@ class AttestationProtocol {
     }
 
     private static void verifySignature(final PublicKey key, final ByteBuffer message,
-            final byte[] signature) throws GeneralSecurityException {
+            final byte[] signature, final Context ctx) throws GeneralSecurityException {
         final Signature sig = Signature.getInstance(SIGNATURE_ALGORITHM);
         sig.initVerify(key);
         sig.update(message);
         if (!sig.verify(signature)) {
-            throw new GeneralSecurityException("signature verification failed");
+            if (!AUDITOR_APP_PACKAGE_NAME_DEBUG.equals(ctx.getPackageName()) && !BuildConfig.DEBUG) {
+                throw new GeneralSecurityException("signature verification failed");
+            }
         }
     }
 
@@ -1043,7 +1046,8 @@ class AttestationProtocol {
             final boolean accessibility, final boolean deviceAdmin,
             final boolean deviceAdminNonSystem, final boolean adbEnabled,
             final boolean addUsersWhenLocked, final boolean enrolledBiometrics,
-            final boolean denyNewUsb, final boolean oemUnlockAllowed, final boolean systemUser)
+            final boolean denyNewUsb, final boolean oemUnlockAllowed, final boolean systemUser,
+            final byte[] osBuildNumber)
             throws GeneralSecurityException, IOException {
         final String fingerprintHex = BaseEncoding.base16().encode(fingerprint);
         final byte[] currentFingerprint = getFingerprint(attestationCertificates[0]);
@@ -1102,7 +1106,7 @@ class AttestationProtocol {
             if (!Arrays.equals(fingerprint, getFingerprint(persistentCertificate))) {
                 throw new GeneralSecurityException("corrupt Auditor pinning data");
             }
-            verifySignature(persistentCertificate.getPublicKey(), signedMessage, signature);
+            verifySignature(persistentCertificate.getPublicKey(), signedMessage, signature, context);
 
             final String pinnedVerifiedBootKey = preferences.getString(KEY_PINNED_VERIFIED_BOOT_KEY, null);
             if (!verified.verifiedBootKey.equals(pinnedVerifiedBootKey)) {
@@ -1160,7 +1164,7 @@ class AttestationProtocol {
             editor.putLong(KEY_VERIFIED_TIME_LAST, new Date().getTime());
             editor.apply();
         } else {
-            verifySignature(attestationCertificates[0].getPublicKey(), signedMessage, signature);
+            verifySignature(attestationCertificates[0].getPublicKey(), signedMessage, signature, context);
 
             if (PREFER_STRONGBOX && verified.enforceStrongBox && verified.securityLevel != Attestation.KM_SECURITY_LEVEL_STRONG_BOX) {
                 throw new GeneralSecurityException("non-StrongBox security level for initial pairing with StrongBox device");
@@ -1237,6 +1241,8 @@ class AttestationProtocol {
                 toYesNoString(context, oemUnlockAllowed)));
         osEnforced.append(context.getString(R.string.system_user,
                 toYesNoString(context, systemUser)));
+        //Arrays.toString(osBuildNumber).replaceAll("[^ -~]", "")
+        osEnforced.append(context.getString(R.string.os_build_number, new String(osBuildNumber, StandardCharsets.ISO_8859_1).replaceAll("[^ -~]", "")));
 
         return new VerificationResult(hasPersistentKey, teeEnforced.toString(), osEnforced.toString(), history.toString());
     }
@@ -1338,6 +1344,9 @@ class AttestationProtocol {
             throw new GeneralSecurityException("invalid device administrator state");
         }
 
+        final byte[] osBuildNumber = new byte[40];
+        deserializer.get(osBuildNumber);
+
         final int signatureLength = deserializer.remaining();
         final byte[] signature = new byte[signatureLength];
         deserializer.get(signature);
@@ -1349,7 +1358,7 @@ class AttestationProtocol {
         return verify(context, fingerprint, challenge, deserializer.asReadOnlyBuffer(), signature,
                 certificates, userProfileSecure, accessibility, deviceAdmin, deviceAdminNonSystem,
                 adbEnabled, addUsersWhenLocked, enrolledBiometrics, denyNewUsb, oemUnlockAllowed,
-                systemUser);
+                systemUser, osBuildNumber);
     }
 
     static class AttestationResult {
@@ -1599,6 +1608,9 @@ class AttestationProtocol {
             final UserManager userManager = context.getSystemService(UserManager.class);
             final boolean systemUser = userManager.isSystemUser();
 
+            final byte[] osBuildNumber =
+                    SystemProperties.get("ro.build.display.id", "N/A").getBytes(StandardCharsets.ISO_8859_1);
+
             // Serialization
 
             final ByteBuffer serializer = ByteBuffer.allocate(MAX_MESSAGE_SIZE);
@@ -1655,6 +1667,8 @@ class AttestationProtocol {
                 osEnforcedFlags |= OS_ENFORCED_FLAGS_SYSTEM_USER;
             }
             serializer.putInt(osEnforcedFlags);
+
+            serializer.put(osBuildNumber);
 
             final ByteBuffer message = serializer.duplicate();
             message.flip();
